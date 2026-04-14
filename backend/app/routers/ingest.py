@@ -6,6 +6,7 @@ from app.database import get_db
 from app.ingestion.url import ingest_url
 from app.ingestion.substack import ingest_all_feeds, ingest_feed
 from app.ingestion.twitter import ingest_tweets
+from app.ingestion.slack_history import ingest_channel_history
 
 router = APIRouter()
 
@@ -44,6 +45,21 @@ def trigger_substack_source(source: str, db: Session = Depends(get_db)):
 def trigger_twitter(db: Session = Depends(get_db)):
     result = ingest_tweets(db)
     return result
+
+
+class SlackHistoryRequest(BaseModel):
+    channel_id: str
+
+
+@router.post("/ingest/slack-history")
+def trigger_slack_history(req: SlackHistoryRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Backfill all past messages and files from a Slack channel."""
+    def run():
+        result = ingest_channel_history(db, req.channel_id)
+        print(f"Slack history ingestion complete: {result}")
+
+    background_tasks.add_task(run)
+    return {"status": "started", "message": f"Ingesting history from channel {req.channel_id} in background"}
 
 
 @router.post("/ingest/slack-event")
