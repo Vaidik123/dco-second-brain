@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --foreground: #111827;
+  --background: #f9fafb;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.prose-custom {
+  @apply text-gray-800 leading-relaxed;
+}
+
+.prose-custom h1, .prose-custom h2, .prose-custom h3 {
+  @apply font-semibold text-gray-900 mt-4 mb-2;
+}
+
+.prose-custom p { @apply mb-3; }
+.prose-custom ul, .prose-custom ol { @apply mb-3 pl-5; }
+.prose-custom li { @apply mb-1; }
+.prose-custom code { @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono; }
+.prose-custom pre { @apply bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto my-3; }
+.prose-custom pre code { @apply bg-transparent p-0; }
+.prose-custom strong { @apply font-semibold; }
+.prose-custom a { @apply text-brand-600 underline underline-offset-2; }
+.prose-custom blockquote { @apply border-l-4 border-brand-500 pl-4 italic text-gray-600; }

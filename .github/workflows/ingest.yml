@@ -1,0 +1,30 @@
+name: Scheduled Ingestion
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch:  # also allow manual trigger
+
+jobs:
+  ingest-substack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Substack ingestion
+        run: |
+          curl -X POST "${{ secrets.API_URL }}/api/ingest/substack" \
+            -H "Content-Type: application/json" \
+            --fail
+        env:
+          API_URL: ${{ secrets.API_URL }}
+
+  ingest-twitter:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Twitter ingestion
+        run: |
+          curl -X POST "${{ secrets.API_URL }}/api/ingest/twitter" \
+            -H "Content-Type: application/json" \
+            --fail
+        env:
+          API_URL: ${{ secrets.API_URL }}
