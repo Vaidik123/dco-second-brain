@@ -22,11 +22,11 @@ def search(db: Session, query: str, limit: int = 8, source_filter: str | None = 
         SELECT i.id, i.title, i.url, i.source, i.author, i.summary, i.tags,
                i.published_at, i.confidence_score, i.access_count,
                e.chunk_text,
-               1 - (e.embedding <=> :vec::vector) AS similarity
+               1 - (e.embedding <=> CAST(:vec AS vector)) AS similarity
         FROM embeddings e
         JOIN items i ON e.item_id = i.id
         WHERE 1=1 {source_clause}
-        ORDER BY e.embedding <=> :vec::vector
+        ORDER BY e.embedding <=> CAST(:vec AS vector)
         LIMIT :limit
     """)
     params = {"vec": vec_str, "limit": limit * 3}

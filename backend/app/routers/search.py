@@ -16,13 +16,8 @@ def search_endpoint(
     limit: int = Query(10, le=50),
     db: Session = Depends(get_db),
 ):
-    import traceback
-    from fastapi import HTTPException
-    try:
-        results = hybrid_search(db, q, limit=limit, source_filter=source)
-        return {"query": q, "results": results, "count": len(results)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}")
+    results = hybrid_search(db, q, limit=limit, source_filter=source)
+    return {"query": q, "results": results, "count": len(results)}
 
 
 @router.get("/items")
