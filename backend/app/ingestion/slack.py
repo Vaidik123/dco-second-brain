@@ -1,6 +1,6 @@
 """
-Slack Events API handler — listens for messages in #research and auto-ingests URLs.
-Also provides a /wiki slash command for searching from Slack.
+Slack Events API handler — listens for messages in #research and auto-ingests URLs,
+PDFs, and images. Also provides a /wiki slash command for searching from Slack.
 """
 import re
 from slack_bolt import App
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal
 from app.ingestion.url import ingest_url
+from app.ingestion.slack_history import _ingest_file
 
 # URLs in Slack messages look like <https://...> or plain https://...
 URL_RE = re.compile(r"https?://[^\s>|]+")
@@ -41,6 +42,40 @@ def handle_message(event, say, logger):
                     )
             except Exception as e:
                 logger.error(f"Failed to ingest {url}: {e}")
+    finally:
+        db.close()
+
+
+@slack_app.event("file_shared")
+def handle_file_shared(event, client, logger):
+    """When a file is uploaded to #research, ingest it (PDF, image, text)."""
+    file_id = event.get("file_id") or event.get("file", {}).get("id")
+    channel_id = event.get("channel_id")
+    if not file_id:
+        return
+
+    try:
+        # Fetch full file metadata
+        file_info = client.files_info(file=file_id)
+        file = file_info.get("file", {})
+    except Exception as e:
+        logger.error(f"Could not fetch file info for {file_id}: {e}")
+        return
+
+    db: Session = SessionLocal()
+    try:
+        result = _ingest_file(db, file)
+        status = result.get("status")
+        title = result.get("title", file.get("name", "file"))
+        if status == "ingested" and channel_id:
+            client.chat_postMessage(
+                channel=channel_id,
+                text=f":brain: Added to Second Brain: *{title}*",
+            )
+        elif status == "skipped":
+            logger.info(f"Skipped file {title}: {result.get('reason')}")
+    except Exception as e:
+        logger.error(f"Failed to ingest file {file_id}: {e}")
     finally:
         db.close()
 

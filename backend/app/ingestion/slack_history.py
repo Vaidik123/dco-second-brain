@@ -17,12 +17,10 @@ from app.services.llm import generate_summary_and_tags
 URL_RE = re.compile(r"https?://[^\s<>|\"']+")
 
 # File types we can ingest
-INGESTIBLE_MIME = {
-    "application/pdf",
-    "text/plain",
-    "text/markdown",
-    "text/html",
-}
+PDF_MIME = {"application/pdf"}
+TEXT_MIME = {"text/plain", "text/markdown", "text/html"}
+IMAGE_MIME = {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"}
+IMAGE_FILETYPES = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
 def _slack_get(endpoint: str, params: dict) -> dict:
@@ -48,6 +46,58 @@ def _extract_text_from_pdf(content: bytes) -> str:
                 if text:
                     pages.append(text)
             return "\n\n".join(pages)
+    except Exception:
+        return ""
+
+
+def _extract_text_from_image(content: bytes, mimetype: str, filename: str) -> str:
+    """Use Claude vision to extract text and describe an image."""
+    import base64
+    import anthropic
+    from app.config import settings
+
+    # Map mimetype to what Claude expects
+    media_map = {
+        "image/png": "image/png",
+        "image/jpeg": "image/jpeg",
+        "image/jpg": "image/jpeg",
+        "image/gif": "image/gif",
+        "image/webp": "image/webp",
+    }
+    media_type = media_map.get(mimetype, "image/png")
+
+    b64 = base64.standard_b64encode(content).decode("utf-8")
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": media_type, "data": b64},
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                f"This image is from the Dco research Slack channel (filename: {filename}).\n"
+                                "Please:\n"
+                                "1. Extract ALL text visible in the image verbatim\n"
+                                "2. Describe what the image shows (chart, screenshot, diagram, photo, etc.)\n"
+                                "3. If it's a chart or graph, describe the key data points and trends\n"
+                                "4. Summarize the key insight or information conveyed\n\n"
+                                "Be thorough — this will be used for semantic search."
+                            ),
+                        },
+                    ],
+                }
+            ],
+        )
+        return response.content[0].text
     except Exception as e:
         return ""
 
@@ -68,9 +118,10 @@ def _ingest_file(db: Session, file: dict) -> dict:
         return {"status": "already_exists", "title": name}
 
     # Only ingest supported types
-    is_pdf = mimetype == "application/pdf" or filetype == "pdf"
-    is_text = mimetype.startswith("text/") or filetype in ("text", "markdown", "md")
-    if not (is_pdf or is_text):
+    is_pdf = mimetype in PDF_MIME or filetype == "pdf"
+    is_text = mimetype in TEXT_MIME or filetype in ("text", "markdown", "md")
+    is_image = mimetype in IMAGE_MIME or filetype in IMAGE_FILETYPES
+    if not (is_pdf or is_text or is_image):
         return {"status": "skipped", "reason": f"unsupported type: {mimetype}"}
 
     if not url_private:
@@ -91,6 +142,8 @@ def _ingest_file(db: Session, file: dict) -> dict:
     # Extract text
     if is_pdf:
         content = _extract_text_from_pdf(file_bytes)
+    elif is_image:
+        content = _extract_text_from_image(file_bytes, mimetype, name)
     else:
         try:
             content = file_bytes.decode("utf-8", errors="replace")
