@@ -3,10 +3,19 @@ FROM python:3.12-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
+    libpq-dev \
+    gcc \
+    g++ \
+    libxml2-dev \
+    libxslt-dev \
+    libffi-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy backend requirements and install
+# Upgrade pip first
+RUN pip install --upgrade pip
+
+# Copy and install Python dependencies
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
