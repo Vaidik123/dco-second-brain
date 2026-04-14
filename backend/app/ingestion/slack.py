@@ -80,11 +80,69 @@ def handle_file_shared(event, client, logger):
         db.close()
 
 
+def _answer_query(query: str, db: Session) -> str:
+    """Search the knowledge base and generate a natural language answer via Claude."""
+    from app.services.knowledge import search
+    from app.services.llm import chat
+
+    results = search(db, query, limit=6)
+    answer = chat(
+        messages=[{"role": "user", "content": query}],
+        context_chunks=results,
+    )
+    return answer, results
+
+
+@slack_app.event("app_mention")
+def handle_mention(event, say, logger):
+    """Respond to @dco_wiki mentions with a knowledge base answer."""
+    from app.services.embeddings import embed_query  # ensure model loaded
+
+    text = event.get("text", "")
+    # Strip the @mention prefix (e.g. <@U0ATKAAKBA4> hello)
+    query = re.sub(r"<@[^>]+>\s*", "", text).strip()
+
+    if not query:
+        say(
+            text=":brain: Hi! Ask me anything — e.g. `@dco_wiki what is DeFi?` or use `/wiki <question>` anytime.",
+            thread_ts=event.get("ts"),
+        )
+        return
+
+    # Typing indicator feel — post a placeholder then update
+    db: Session = SessionLocal()
+    try:
+        answer, results = _answer_query(query, db)
+
+        # Build sources footer
+        seen = set()
+        sources = []
+        for r in results[:3]:
+            url = r.get("url") or ""
+            title = r.get("title") or "Untitled"
+            if url and url not in seen and not url.startswith("slack://"):
+                seen.add(url)
+                sources.append(f"<{url}|{title}>")
+
+        source_line = "\n\n:link: *Sources:* " + " · ".join(sources) if sources else ""
+
+        say(
+            text=f":brain: {answer}{source_line}",
+            thread_ts=event.get("ts"),
+        )
+    except Exception as e:
+        logger.error(f"Error answering mention: {e}")
+        say(
+            text=":warning: Something went wrong. Try again in a moment.",
+            thread_ts=event.get("ts"),
+        )
+    finally:
+        db.close()
+
+
 @slack_app.command("/wiki")
 def handle_wiki_command(ack, respond, command):
     """Slack slash command: /wiki <query> — search the Second Brain from Slack."""
-    from app.services.knowledge import search
-
     ack()
     query = command.get("text", "").strip()
     if not query:
@@ -93,24 +151,30 @@ def handle_wiki_command(ack, respond, command):
 
     db: Session = SessionLocal()
     try:
-        results = search(db, query, limit=5)
-        if not results:
-            respond(f"No results found for: *{query}*")
-            return
+        answer, results = _answer_query(query, db)
 
-        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": f":mag: *Results for:* {query}"}}]
-        for r in results:
-            title = r.get("title") or "Untitled"
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": f":mag: *{query}*"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": answer}},
+            {"type": "divider"},
+        ]
+
+        seen = set()
+        for r in results[:4]:
             url = r.get("url") or ""
-            summary = (r.get("summary") or r.get("chunk_text") or "")[:200]
+            title = r.get("title") or "Untitled"
+            summary = (r.get("summary") or r.get("chunk_text") or "")[:150]
             source = r.get("source") or ""
-            tags = ", ".join(r.get("tags") or [])
-            text = f"*<{url}|{title}>* [{source}]\n{summary}"
-            if tags:
-                text += f"\n_Tags: {tags}_"
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
-            blocks.append({"type": "divider"})
+            if url in seen or url.startswith("slack://"):
+                continue
+            seen.add(url)
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*<{url}|{title}>* [{source}]\n{summary}"},
+            })
 
         respond(blocks=blocks)
+    except Exception as e:
+        respond(f":warning: Error: {e}")
     finally:
         db.close()
