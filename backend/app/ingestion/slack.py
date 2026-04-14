@@ -1,6 +1,6 @@
 """
 Slack Events API handler — listens for messages in #research and auto-ingests URLs,
-PDFs, and images. Also provides a /wiki slash command for searching from Slack.
+PDFs, and images. Answers questions via DMs and @mentions. /wiki slash command.
 """
 import re
 from slack_bolt import App
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal
-from app.ingestion.url import ingest_url
+from app.ingestion.url import ingest_url, _is_blocked
 from app.ingestion.slack_history import _ingest_file
 
 # URLs in Slack messages look like <https://...> or plain https://...
@@ -20,19 +20,68 @@ slack_app = App(
 )
 
 
+def _answer_query(query: str, db: Session):
+    """Search the knowledge base and generate a natural language answer via Claude."""
+    from app.services.knowledge import search
+    from app.services.llm import chat
+
+    results = search(db, query, limit=6)
+    answer = chat(
+        messages=[{"role": "user", "content": query}],
+        context_chunks=results,
+    )
+    return answer, results
+
+
+def _build_source_line(results: list) -> str:
+    seen = set()
+    sources = []
+    for r in results[:3]:
+        url = r.get("url") or ""
+        title = r.get("title") or "Untitled"
+        if url and url not in seen and not url.startswith("slack://"):
+            seen.add(url)
+            sources.append(f"<{url}|{title}>")
+    return "\n\n:link: *Sources:* " + " · ".join(sources) if sources else ""
+
+
 @slack_app.event("message")
 def handle_message(event, say, logger):
-    """When a message is posted in #research, extract and ingest any URLs."""
-    text = event.get("text", "")
-    channel = event.get("channel_type")
+    """Handle channel messages (URL ingestion) and DMs (Q&A)."""
+    # Ignore bot messages and edits
+    if event.get("bot_id") or event.get("subtype"):
+        return
 
+    channel_type = event.get("channel_type")
+    text = event.get("text", "").strip()
+
+    # ── Direct Message → answer the question ──────────────────────────────
+    if channel_type == "im":
+        if not text:
+            say("Hi! Ask me anything about Dco's research.\n_e.g. 'what is DeFi?' or 'summarise the latest on stablecoins'_")
+            return
+        db: Session = SessionLocal()
+        try:
+            answer, results = _answer_query(text, db)
+            say(f":brain: {answer}{_build_source_line(results)}")
+        except Exception as e:
+            logger.error(f"DM answer error: {e}")
+            say(":warning: Something went wrong. Try again in a moment.")
+        finally:
+            db.close()
+        return
+
+    # ── Channel message → ingest URLs ────────────────────────────────────
     urls = URL_RE.findall(text)
     if not urls:
         return
 
     db: Session = SessionLocal()
     try:
-        for url in urls[:3]:  # max 3 per message
+        for url in urls[:3]:
+            url = url.rstrip(".,;)")
+            if _is_blocked(url):
+                continue
             try:
                 result = ingest_url(db, url, source="slack", extra={"slack_channel": event.get("channel")})
                 if result.get("status") == "ingested":
@@ -48,14 +97,13 @@ def handle_message(event, say, logger):
 
 @slack_app.event("file_shared")
 def handle_file_shared(event, client, logger):
-    """When a file is uploaded to #research, ingest it (PDF, image, text)."""
+    """When a file is uploaded, ingest it (PDF, image, text)."""
     file_id = event.get("file_id") or event.get("file", {}).get("id")
     channel_id = event.get("channel_id")
     if not file_id:
         return
 
     try:
-        # Fetch full file metadata
         file_info = client.files_info(file=file_id)
         file = file_info.get("file", {})
     except Exception as e:
@@ -72,77 +120,42 @@ def handle_file_shared(event, client, logger):
                 channel=channel_id,
                 text=f":brain: Added to Second Brain: *{title}*",
             )
-        elif status == "skipped":
-            logger.info(f"Skipped file {title}: {result.get('reason')}")
     except Exception as e:
         logger.error(f"Failed to ingest file {file_id}: {e}")
     finally:
         db.close()
 
 
-def _answer_query(query: str, db: Session) -> str:
-    """Search the knowledge base and generate a natural language answer via Claude."""
-    from app.services.knowledge import search
-    from app.services.llm import chat
-
-    results = search(db, query, limit=6)
-    answer = chat(
-        messages=[{"role": "user", "content": query}],
-        context_chunks=results,
-    )
-    return answer, results
-
-
 @slack_app.event("app_mention")
 def handle_mention(event, say, logger):
     """Respond to @dco_wiki mentions with a knowledge base answer."""
-    from app.services.embeddings import embed_query  # ensure model loaded
-
     text = event.get("text", "")
-    # Strip the @mention prefix (e.g. <@U0ATKAAKBA4> hello)
     query = re.sub(r"<@[^>]+>\s*", "", text).strip()
 
     if not query:
         say(
-            text=":brain: Hi! Ask me anything — e.g. `@dco_wiki what is DeFi?` or use `/wiki <question>` anytime.",
+            text=":brain: Hi! Ask me anything — e.g. `@dco_wiki what is DeFi?` or DM me directly.",
             thread_ts=event.get("ts"),
         )
         return
 
-    # Typing indicator feel — post a placeholder then update
     db: Session = SessionLocal()
     try:
         answer, results = _answer_query(query, db)
-
-        # Build sources footer
-        seen = set()
-        sources = []
-        for r in results[:3]:
-            url = r.get("url") or ""
-            title = r.get("title") or "Untitled"
-            if url and url not in seen and not url.startswith("slack://"):
-                seen.add(url)
-                sources.append(f"<{url}|{title}>")
-
-        source_line = "\n\n:link: *Sources:* " + " · ".join(sources) if sources else ""
-
         say(
-            text=f":brain: {answer}{source_line}",
+            text=f":brain: {answer}{_build_source_line(results)}",
             thread_ts=event.get("ts"),
         )
     except Exception as e:
         logger.error(f"Error answering mention: {e}")
-        say(
-            text=":warning: Something went wrong. Try again in a moment.",
-            thread_ts=event.get("ts"),
-        )
+        say(text=":warning: Something went wrong. Try again.", thread_ts=event.get("ts"))
     finally:
         db.close()
 
 
 @slack_app.command("/wiki")
 def handle_wiki_command(ack, respond, command):
-    """Slack slash command: /wiki <query> — search the Second Brain from Slack."""
+    """Slack slash command: /wiki <query>"""
     ack()
     query = command.get("text", "").strip()
     if not query:
@@ -158,7 +171,6 @@ def handle_wiki_command(ack, respond, command):
             {"type": "section", "text": {"type": "mrkdwn", "text": answer}},
             {"type": "divider"},
         ]
-
         seen = set()
         for r in results[:4]:
             url = r.get("url") or ""
