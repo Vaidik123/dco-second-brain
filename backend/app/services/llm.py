@@ -24,7 +24,7 @@ def chat(messages: list[dict], context_chunks: list[dict]) -> str:
         system += f"\n\n## Relevant Knowledge Base Excerpts\n{context_text}"
 
     response = _client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5-20251001",
         max_tokens=2048,
         system=system,
         messages=messages,
@@ -40,7 +40,7 @@ def stream_chat(messages: list[dict], context_chunks: list[dict]):
         system += f"\n\n## Relevant Knowledge Base Excerpts\n{context_text}"
 
     with _client.messages.stream(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5-20251001",
         max_tokens=2048,
         system=system,
         messages=messages,
@@ -82,7 +82,7 @@ Format any key stats or claims as proper inline citations.
 Be specific and actionable."""
 
     response = _client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5-20251001",
         max_tokens=3000,
         messages=[{"role": "user", "content": prompt}],
     )
