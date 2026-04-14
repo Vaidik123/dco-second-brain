@@ -3,6 +3,7 @@ Ingest any single URL into the knowledge base.
 Used by Slack handler, manual API endpoint, and article ingestion.
 """
 from datetime import datetime
+from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from app.models import Item, Embedding
@@ -11,8 +12,29 @@ from app.services.embeddings import chunk_text, embed_texts
 from app.services.llm import generate_summary_and_tags
 from app.services.knowledge import boost_confidence
 
+# Domains that require login or JS rendering — cannot be scraped meaningfully
+BLOCKED_DOMAINS = {
+    "x.com", "twitter.com", "instagram.com", "linkedin.com",
+    "facebook.com", "tiktok.com", "threads.net",
+    "open.spotify.com", "music.apple.com",
+    "docs.google.com", "drive.google.com",
+    "notion.so", "figma.com",
+}
+
+
+def _is_blocked(url: str) -> bool:
+    try:
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        return any(host == d or host.endswith("." + d) for d in BLOCKED_DOMAINS)
+    except Exception:
+        return False
+
 
 def ingest_url(db: Session, url: str, source: str = "manual", extra: dict | None = None) -> dict:
+    # Block unscrappable domains
+    if _is_blocked(url):
+        return {"status": "skipped", "reason": "blocked domain", "url": url}
+
     # Check if already exists
     existing = db.query(Item).filter_by(url=url).first()
     if existing:

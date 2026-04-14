@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models import Item, Embedding
 from app.services.knowledge import search
 from app.services.llm import analyze_article
 
@@ -52,6 +53,18 @@ def analyze_article_text(req: ArticleTextRequest, db: Session = Depends(get_db))
             for c in context[:12]
         ],
     }
+
+
+@router.delete("/items/{item_id}")
+def delete_item(item_id: str, db: Session = Depends(get_db)):
+    """Delete an item and its embeddings from the knowledge base."""
+    item = db.query(Item).filter_by(id=item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    db.query(Embedding).filter_by(item_id=item_id).delete()
+    db.delete(item)
+    db.commit()
+    return {"status": "deleted", "id": item_id}
 
 
 @router.post("/article/upload")
