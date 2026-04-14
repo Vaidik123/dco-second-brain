@@ -2,12 +2,13 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function* streamChat(
   messages: { role: string; content: string }[],
-  sourceFilter?: string
+  sourceFilter?: string,
+  model?: string
 ): AsyncGenerator<{ type: "text"; content: string } | { type: "sources"; sources: Source[] }> {
   const res = await fetch(`${API_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, source_filter: sourceFilter || null }),
+    body: JSON.stringify({ messages, source_filter: sourceFilter || null, model }),
   });
 
   if (!res.body) throw new Error("No response body");

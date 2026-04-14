@@ -22,6 +22,7 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [model, setModel] = useState<string>("claude-haiku-4-5-20251001");
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -43,7 +44,7 @@ export default function ChatPage() {
 
     try {
       const apiMessages = newMessages.map((m) => ({ role: m.role, content: m.content }));
-      for await (const chunk of streamChat(apiMessages, sourceFilter || undefined)) {
+      for await (const chunk of streamChat(apiMessages, sourceFilter || undefined, model)) {
         if (chunk.type === "text") {
           setMessages((prev) => {
             const last = { ...prev[prev.length - 1] };
@@ -79,6 +80,15 @@ export default function ChatPage() {
       {/* Header */}
       <div className="border-b border-gray-200 bg-white px-6 py-3 flex items-center justify-between shrink-0">
         <h1 className="font-semibold text-gray-900">Chat with Second Brain</h1>
+        <div className="flex items-center gap-2">
+        <select
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand-500"
+        >
+          <option value="claude-haiku-4-5-20251001">⚡ Haiku (Fast)</option>
+          <option value="claude-sonnet-4-6">🧠 Sonnet (Smarter)</option>
+        </select>
         <select
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
@@ -90,6 +100,7 @@ export default function ChatPage() {
           <option value="slack">Slack #research</option>
           <option value="twitter">Twitter</option>
         </select>
+        </div>
       </div>
 
       {/* Messages */}

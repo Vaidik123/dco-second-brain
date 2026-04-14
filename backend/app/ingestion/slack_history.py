@@ -243,6 +243,54 @@ def ingest_channel_history(db: Session, channel_id: str) -> dict:
                 except Exception as e:
                     stats["errors"].append(f"URL ingest error ({url}): {e}")
 
+            # Extract tweet text from Slack unfurls of x.com/twitter.com
+            for att in msg.get("attachments", []):
+                service = (att.get("service_name") or "").lower()
+                from_url = att.get("from_url") or att.get("original_url") or ""
+                is_tweet = service in ("twitter", "x") or "x.com" in from_url or "twitter.com" in from_url
+                if not is_tweet:
+                    continue
+
+                tweet_text = att.get("text") or att.get("fallback") or ""
+                author = att.get("author_name") or att.get("author_subname") or ""
+                title = att.get("title") or f"Tweet by {author}"
+
+                if not tweet_text or len(tweet_text) < 10:
+                    continue
+                if not from_url:
+                    continue
+
+                # Deduplicate
+                existing = db.query(Item).filter_by(url=from_url).first()
+                if existing:
+                    continue
+
+                content = f"{title}\n\n{tweet_text}"
+                if author:
+                    content = f"@{author} on X (Twitter):\n\n{tweet_text}"
+
+                meta = generate_summary_and_tags(title, content)
+                item = Item(
+                    url=from_url,
+                    title=title,
+                    content=content,
+                    summary=meta.get("summary"),
+                    source="slack",
+                    author=author or None,
+                    tags=meta.get("tags", []),
+                    extra={"tweet": True, "slack_channel": channel_id},
+                )
+                db.add(item)
+                db.flush()
+                chunks = chunk_text(content)
+                if chunks:
+                    embeddings = embed_texts(chunks)
+                    from app.models import Embedding
+                    for idx, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+                        db.add(Embedding(item_id=item.id, chunk_text=chunk, chunk_index=idx, embedding=emb))
+                db.commit()
+                stats["urls_ingested"] += 1
+
             # Process file attachments
             for file in msg.get("files", []):
                 stats["files_found"] += 1

@@ -18,6 +18,7 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[Message]
     source_filter: str | None = None  # optionally restrict to one source
+    model: str = "claude-haiku-4-5-20251001"
 
 
 @router.post("/chat")
@@ -32,7 +33,7 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
 
     def generate():
-        for chunk in stream_chat(messages, context):
+        for chunk in stream_chat(messages, context, model=req.model):
             yield f"data: {chunk}\n\n"
         # Send sources at the end as a special event
         import json

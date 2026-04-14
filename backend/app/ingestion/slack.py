@@ -10,6 +10,9 @@ from app.config import settings
 from app.database import SessionLocal
 from app.ingestion.url import ingest_url, _is_blocked
 from app.ingestion.slack_history import _ingest_file
+from app.models import Item
+from app.services.embeddings import chunk_text, embed_texts
+from app.services.llm import generate_summary_and_tags
 
 # URLs in Slack messages look like <https://...> or plain https://...
 URL_RE = re.compile(r"https?://[^\s>|]+")
@@ -73,7 +76,7 @@ def handle_message(event, say, logger):
 
     # ── Channel message → ingest URLs ────────────────────────────────────
     urls = URL_RE.findall(text)
-    if not urls:
+    if not urls and not event.get("attachments"):
         return
 
     db: Session = SessionLocal()
@@ -91,6 +94,60 @@ def handle_message(event, say, logger):
                     )
             except Exception as e:
                 logger.error(f"Failed to ingest {url}: {e}")
+
+        # Extract tweet text from Slack unfurls of x.com/twitter.com
+        for att in event.get("attachments", []):
+            service = (att.get("service_name") or "").lower()
+            from_url = att.get("from_url") or att.get("original_url") or ""
+            is_tweet = service in ("twitter", "x") or "x.com" in from_url or "twitter.com" in from_url
+            if not is_tweet:
+                continue
+
+            tweet_text = att.get("text") or att.get("fallback") or ""
+            author = att.get("author_name") or att.get("author_subname") or ""
+            title = att.get("title") or f"Tweet by {author}"
+
+            if not tweet_text or len(tweet_text) < 10:
+                continue
+            if not from_url:
+                continue
+
+            # Deduplicate
+            existing = db.query(Item).filter_by(url=from_url).first()
+            if existing:
+                continue
+
+            content = f"{title}\n\n{tweet_text}"
+            if author:
+                content = f"@{author} on X (Twitter):\n\n{tweet_text}"
+
+            try:
+                meta = generate_summary_and_tags(title, content)
+                item = Item(
+                    url=from_url,
+                    title=title,
+                    content=content,
+                    summary=meta.get("summary"),
+                    source="slack",
+                    author=author or None,
+                    tags=meta.get("tags", []),
+                    extra={"tweet": True, "slack_channel": event.get("channel")},
+                )
+                db.add(item)
+                db.flush()
+                chunks = chunk_text(content)
+                if chunks:
+                    embeddings = embed_texts(chunks)
+                    from app.models import Embedding
+                    for idx, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+                        db.add(Embedding(item_id=item.id, chunk_text=chunk, chunk_index=idx, embedding=emb))
+                db.commit()
+                say(
+                    text=f":brain: Added tweet to Second Brain: *{title}*",
+                    thread_ts=event.get("ts"),
+                )
+            except Exception as e:
+                logger.error(f"Failed to ingest tweet {from_url}: {e}")
     finally:
         db.close()
 

@@ -15,7 +15,7 @@ When answering:
 """
 
 
-def chat(messages: list[dict], context_chunks: list[dict]) -> str:
+def chat(messages: list[dict], context_chunks: list[dict], model: str = "claude-haiku-4-5-20251001") -> str:
     """Non-streaming chat with retrieved context injected."""
     context_text = _format_context(context_chunks)
 
@@ -24,7 +24,7 @@ def chat(messages: list[dict], context_chunks: list[dict]) -> str:
         system += f"\n\n## Relevant Knowledge Base Excerpts\n{context_text}"
 
     response = _client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=model,
         max_tokens=2048,
         system=system,
         messages=messages,
@@ -32,7 +32,7 @@ def chat(messages: list[dict], context_chunks: list[dict]) -> str:
     return response.content[0].text
 
 
-def stream_chat(messages: list[dict], context_chunks: list[dict]):
+def stream_chat(messages: list[dict], context_chunks: list[dict], model: str = "claude-haiku-4-5-20251001"):
     """Streaming chat — yields text chunks."""
     context_text = _format_context(context_chunks)
     system = SYSTEM_PROMPT
@@ -40,7 +40,7 @@ def stream_chat(messages: list[dict], context_chunks: list[dict]):
         system += f"\n\n## Relevant Knowledge Base Excerpts\n{context_text}"
 
     with _client.messages.stream(
-        model="claude-haiku-4-5-20251001",
+        model=model,
         max_tokens=2048,
         system=system,
         messages=messages,
